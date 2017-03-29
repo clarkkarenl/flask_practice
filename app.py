@@ -1,11 +1,56 @@
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, abort, request, make_response, url_for
+from flask_httpauth import HTTPBasicAuth
 
-import api
+from contact_api import api
 import json
 
+app = Flask(__name__, static_url_path = "")
 
-app = Flask(__name__)
-# seed the store with a default record
+auth = HTTPBasicAuth()
+
+@auth.get_password
+def get_password(username):
+    if username == 'admin':
+        return 'python'
+    return None
+
+@auth.error_handler
+def unauthorized(error=None):
+    message = {
+        'status': 403,
+        'message': 'Forbidden: ' + request.url,
+    }
+    resp = jsonify(message)
+    resp.status_code = 403
+
+    return resp
+    # return make_response(jsonify({'error': 'Unauthorized access'}), 403)
+
+@app.errorhandler(400)
+def bad_request(error=None):
+    message = {
+        'status': 400,
+        'message': 'Bad request: ' + request.url,
+    }
+    resp = jsonify(message)
+    resp.status_code = 400
+
+    return resp
+    # return make_response(jsonify( { 'error': 'Bad request' } ), 400)
+
+@app.errorhandler(404)
+def not_found(error=None):
+    message = {
+        'status': 404,
+        'message': 'Not found: ' + request.url,
+    }
+    resp = jsonify(message)
+    resp.status_code = 404
+
+    return resp
+    # return make_response(jsonify( { 'error': 'Not found' } ), 404)
+
+# seed the store with two default records - one live and one deleted
 store = {
     'foo@bar.com':
     {
@@ -15,7 +60,7 @@ store = {
         'city': 'Hoserville',
         'state': 'CA',
         'zip_code': '91234',
-        'phone_number': '1-818-555-1234',
+        'phone_number': '818-555-1234',
         'is_deleted': False
     },
     'buxx@bar.com':
@@ -25,52 +70,53 @@ store = {
         'address_line2': '',
         'city': 'Johnson',
         'state': 'OR',
-        'zip_code': '97008',
-        'phone_number': '1-503-555-1234',
+        'zip_code': '97011',
+        'phone_number': '503-555-1234',
         'is_deleted': True
     },
 }
 
-# TODO LIST:
-# login:
-## - did I get auth?
-## - un-base64 it
-## - does ^ version of auth match expected?
-## if yes, proceed, if no, 401
-# validation:
-## contemplate validation of some sort
-# tests!
-
 # get all
+# filter all by a single email address using '?email=' token
+@app.route("/contact", methods=['GET'])
+def get_all_or_filtered_contact():
+    # if we have a key for filtering, operate on it
+    email = request.args.get('email', None)
+    # get all contacts
+    result = api.filter(store, email)
+    return jsonify(result), 200
+
 # create one
-# search for email addy
-@app.route("/contact", methods=['GET', 'POST'])
-# TODO rename this damn thing
-def do_stuff():
-    if request.method == 'GET':
-        # if we have a key for filtering, operate on it
-        email = request.args.get('email', None)
-        # get all contacts
-        result = api.filter(store, email)
-        return jsonify(result)
-    if request.method == 'POST':
-        # create contact
-        contact = request.get_json()
-        api.create(store, contact)
-        return "OK", 201
+@app.route("/contact/create", methods=['POST'])
+@auth.login_required
+def create_contact():
+    contact = request.get_json()
+    # add the request data to the store
+    api.create(store, contact)
+    return "OK", 201
 
 # get specific contact
-# delete a contact by marking its is_deleted flag True
-@app.route("/contact/<email>", methods=['GET', 'DELETE'])
-def get_contact(email):
+@app.route("/contact/<email>", methods=['GET'])
+def get_single_contact(email):
     # get a single contact
-    if request.method == 'GET':
-        result = api.get(store, email)
-        return jsonify(result)
+    result = api.filter(store, email)
+    if result:
+        return jsonify(result), 200
+    else:
+        return not_found()
+
+
+# delete specific contact by marking its is_deleted flag True
+# alter existing contact by replacing info and returning new record
+@app.route("/contact/<email>", methods=['DELETE', 'PUT'])
+@auth.login_required
+def delete_or_replace_single_contact(email):
     if request.method == 'DELETE':
         api.delete(store, email)
-        return "OK", 200
-
+        return "OK", 201
+    if request.method == 'PUT':
+        result = api.replace(store, email)
+        return "OK", 201
 
 if __name__ == "__main__":
     app.run()
